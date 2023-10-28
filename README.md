@@ -169,6 +169,7 @@ Example APN:
 <apn pid="apn-1" carrier="ATT NR Broadband" mcc="310" mnc="280" apn="nrbroadband" type="default,supl,dun,mms,fota" protocol="IPV4V6" mvno_type="gid" mvno_match_data="S" />
 <apn pid="apn-2" carrier="ATT Enhancedphone" mcc="310" mnc="280" apn="enhancedphone" type="default,supl,dun,mms,fota" protocol="IPV4V6" />
 <!-- I'm not sure which part of the simplification would cause Cricket's APN to malfunction, so I'm writing down the version that works for me properly here. -->
+<!-- Additionally, after booting up, one might need to manually toggle the airplane mode or switch the APN once to register on the network. The reason for this is unclear. -->
 <apn pid="apn-3" carrier="Cricket internet" carrier_id = "10029" apn="endo" type="default,mms,supl,fota" mmsc="http://mmsc.aiowireless.net" mmsproxy="proxy.aiowireless.net" mmsport="80" protocol="IPV4V6" roaming_protocol="IPV4V6" user_editable="true" />
 ```
 
