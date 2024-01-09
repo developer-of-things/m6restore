@@ -11,6 +11,17 @@
 
 </aside>
 
+<aside>
+📢 Now there are automated scripts for MacOS and Windows! Check them out in the repository.
+
+
+[🪟 Windows Automated Powershell Script Instructions](windows%20script.md)
+
+[🍏 MacOS Automated Script Instructions](macos%20script.md)
+
+</aside>
+
+
 Clone repository
 
 ```bash

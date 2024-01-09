@@ -88,7 +88,7 @@ while [ -z "$imei" ]; do
   fi
 done
 
-python m6restore.py $imei
+python m6restore.py $imei $ip_address
 
 reboot_confirm=""
 while [ "$reboot_confirm" != "y" ] && [ "$reboot_confirm" != "yes" ]; do

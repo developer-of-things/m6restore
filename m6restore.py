@@ -11,6 +11,8 @@ import sys
 
 #verify supplied imei is valid
 newimei = sys.argv[1]
+if len(sys.argv) > 2 and re.match(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$', sys.argv[2]):
+    HOST = sys.argv[2]
 
 imeiverification = luhn.verify(newimei)
 
