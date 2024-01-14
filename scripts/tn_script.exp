@@ -2,7 +2,11 @@
 
 set timeout -1  
 
-spawn telnet 192.168.1.1 23
+# Get the first parameter and assign it to ip_address
+set ip_address [lindex $argv 0]
+
+# Use ip_address in the spawn telnet call
+spawn telnet $ip_address 23
 
 expect "#"  
 send "ls -l\r" 
