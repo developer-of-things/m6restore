@@ -1,16 +1,88 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# (c) B.Kerler 2019-2020 under MIT license
+# (c) B.Kerler 2019-2023 under GPLv3 license
 # If you use my code, make sure you refer to my name
-# If you want to use in a commercial product, ask me before integrating it
-
-import serial
+#
+# !!!!! If you use this code in commercial products, your product is automatically
+# GPLv3 and has to be open sourced under GPLv3 as well. !!!!!
+import copy
 import sys
 import argparse
 import time
 import serial.tools.list_ports
-from telnetlib import Telnet
+from Exscript.protocols.telnetlib import Telnet
 from binascii import hexlify, unhexlify
+import logging
+import logging.config
+import logging.handlers
+import colorama
+
+class ColorFormatter(logging.Formatter):
+    LOG_COLORS = {
+        logging.ERROR: colorama.Fore.RED,
+        logging.DEBUG: colorama.Fore.LIGHTMAGENTA_EX,
+        logging.WARNING: colorama.Fore.YELLOW,
+    }
+
+    def format(self, record, *args, **kwargs):
+        # if the corresponding logger has children, they may receive modified
+        # record, so we want to keep it intact
+        new_record = copy.copy(record)
+        if new_record.levelno in self.LOG_COLORS:
+            pad = ""
+            if new_record.name != "root":
+                print(new_record.name)
+                pad = "[LIB]: "
+            # we want levelname to be in different color, so let's modify it
+            new_record.msg = "{pad}{color_begin}{msg}{color_end}".format(
+                pad=pad,
+                msg=new_record.msg,
+                color_begin=self.LOG_COLORS[new_record.levelno],
+                color_end=colorama.Style.RESET_ALL,
+            )
+        # now we can let standart formatting take care of the rest
+        return super(ColorFormatter, self).format(new_record, *args, **kwargs)
+
+
+class LogBase(type):
+    debuglevel = logging.root.level
+
+    def __init__(cls, *args):
+        super().__init__(*args)
+        logger_attribute_name = '_' + cls.__name__ + '__logger'
+        logger_debuglevel_name = '_' + cls.__name__ + '__debuglevel'
+        logger_name = '.'.join([c.__name__ for c in cls.mro()[-2::-1]])
+        LOG_CONFIG = {
+            "version": 1,
+            "disable_existing_loggers": False,
+            "formatters": {
+                "root": {
+                    "()": ColorFormatter,
+                    "format": "%(name)s - %(message)s",
+                }
+            },
+            "handlers": {
+                "root": {
+                    # "level": cls.__logger.level,
+                    "formatter": "root",
+                    "class": "logging.StreamHandler",
+                    "stream": "ext://sys.stdout",
+                }
+            },
+            "loggers": {
+                "": {
+                    "handlers": ["root"],
+                    # "level": cls.debuglevel,
+                    "propagate": False
+                }
+            },
+        }
+        logging.config.dictConfig(LOG_CONFIG)
+        logger = logging.getLogger(logger_name)
+
+        setattr(cls, logger_attribute_name, logger)
+        setattr(cls, logger_debuglevel_name, cls.debuglevel)
+
 
 '''
 C7 = 7 0		0	2	7		5 0
@@ -50,11 +122,12 @@ prodtable = {
                     run="resultbuffer[i]=self.SierraAlgo(challenge[i], 4, 2, 1, 0, 3, 2, 0, 0)"),  # EM7565
     "MDM9x06": dict(openlock=20, openmep=19, opencnd=20, clen=8, init=[7, 3, 0, 1, 5],
                     run="resultbuffer[i]=self.SierraAlgo(challenge[i], 4, 2, 1, 0, 3, 2, 0, 0)"),  # WP77xx
-    "SDX55": dict(openlock=22, openmep=21, opencnd=22, clen=8, init=[7, 3, 0, 1, 5], #MR5100
-                       run="resultbuffer[i]=self.SierraAlgo(challenge[i], 4, 2, 1, 0, 3, 2, 0, 0)"),
-    "MDM9x15A": dict(openlock=24, openmep=23, opencnd=24, clen=8, init=[7, 3, 0, 1, 5], #AC779S
-                       run="resultbuffer[i]=self.SierraAlgo(challenge[i], 4, 2, 1, 0, 3, 2, 0, 0)"),
-
+    "SDX55": dict(openlock=22, openmep=21, opencnd=22, clen=8, init=[7, 3, 0, 1, 5],  # MR5100, MR6400 old fw
+                  run="resultbuffer[i]=self.SierraAlgo(challenge[i], 4, 2, 1, 0, 3, 2, 0, 0)"),
+    "MDM9x15A": dict(openlock=24, openmep=23, opencnd=24, clen=8, init=[7, 3, 0, 1, 5],  # AC779S
+                     run="resultbuffer[i]=self.SierraAlgo(challenge[i], 4, 2, 1, 0, 3, 2, 0, 0)"),
+    "SDX65": dict(openlock=25, openmep=21, opencnd=26, clen=8, init=[7, 3, 0, 1, 5],  # MR6400 new fw
+                  run="resultbuffer[i]=self.SierraAlgo(challenge[i], 4, 2, 1, 0, 3, 2, 0, 0)")
 }
 
 infotable = {
@@ -74,130 +147,110 @@ infotable = {
     "MDM9x15A": ["AC779S"],
     "MDM9x30": ["EM7455", "MC7455", "EM7430", "MC7430"],
     "MDM9x30_V1": ["Netgear AC790/MDM9230"],
-    "MDM9x40": ["AC815s", "AC785s", "AC797S", "MR1100"],
+    "MDM9x40": ["MR1100", "AC815s", "AC785s", "AC797S"],
     "MDM9x50": ["EM7565", "EM7565-9", "EM7511", "EM7411"],
-    "SDX55" : ["MR5100","ac797-100eus"]
+    "SDX55": ["MR5100", "MR5200", "ac797-100eus", "MR6400"],
+    "SDX65": ["MR6400", "MR6500", "MR6110", "MR6150", "MR6450", "MR6550"]
 }
 
-keytable = bytearray([0xF0, 0x14, 0x55, 0x0D, 0x5E, 0xDA, 0x92, 0xB3, 0xA7, 0x6C, 0xCE, 0x84, 0x90, 0xBC, 0x7F, 0xED,
                       # 0 MC8775_H2.0.8.19 !OPENLOCK, !OPENCND .. MC8765V,MC8765,MC8755V,MC8775,MC8775V,MC8775,AC850,
                       #   AC860,AC875,AC881,AC881U,AC875, AC340U 1.13.12.14
-                      0x61, 0x94, 0xCE, 0xA7, 0xB0, 0xEA, 0x4F, 0x0A, 0x73, 0xC5, 0xC3, 0xA6, 0x5E, 0xEC, 0x1C, 0xE2,
+keytable = bytearray([0xF0, 0x14, 0x55, 0x0D, 0x5E, 0xDA, 0x92, 0xB3, 0xA7, 0x6C, 0xCE, 0x84, 0x90, 0xBC, 0x7F, 0xED,
                       # 1 MC8775_H2.0.8.19 AC340U, OPENMEP default
-                      0x39, 0xC6, 0x7B, 0x04, 0xCA, 0x50, 0x82, 0x1F, 0x19, 0x63, 0x36, 0xDE, 0x81, 0x49, 0xF0, 0xD7,
-                      # 2 AC750,AC710,AC7XX,SB750A,SB750,PC7000,AC313u OPENMEP
-                      0xDE, 0xA5, 0xAD, 0x2E, 0xBE, 0xE1, 0xC9, 0xEF, 0xCA, 0xF9, 0xFE, 0x1F, 0x17, 0xFE, 0xED, 0x3B,
-                      # 3 AC775,PC7200
-                      0xFE, 0xD4, 0x40, 0x52, 0x2D, 0x4B, 0x12, 0x5C, 0xE7, 0x0D, 0xF8, 0x79, 0xF8, 0xC0, 0xDD, 0x37,
-                      # 4 MC7455_02.30.01.01 OPENMEP
-                      0x3B, 0x18, 0x99, 0x6B, 0x57, 0x24, 0x0A, 0xD8, 0x94, 0x6F, 0x8E, 0xD9, 0x90, 0xBC, 0x67, 0x56,
-                      # 5 MC7455_02.30.01.01 OPENLOCK
-                      0x47, 0x4F, 0x4F, 0x44, 0x4A, 0x4F, 0x42, 0x44, 0x45, 0x43, 0x4F, 0x44, 0x49, 0x4E, 0x47, 0x2E,
-                      # 6 SWI9x50 Openmep Key SWI9X50C_01.08.04.00
-                      0x4F, 0x4D, 0x41, 0x52, 0x20, 0x44, 0x49, 0x44, 0x20, 0x54, 0x48, 0x49, 0x53, 0x2E, 0x2E, 0x2E,
-                      # 7 SWI9x50 Openlock Key SWI9X50C_01.08.04.00
-                      0x8F, 0xA5, 0x85, 0x05, 0x5E, 0xCF, 0x44, 0xA0, 0x98, 0x8B, 0x09, 0xE8, 0xBB, 0xC6, 0xF7, 0x65,
-                      # 8 MDM8200 Special
-                      0x4D, 0x42, 0xD8, 0xC1, 0x25, 0x44, 0xD8, 0xA0, 0x1D, 0x80, 0xC4, 0x52, 0x8E, 0xEC, 0x8B, 0xE3,
-                      # 9 SWI9x07 Openlock Key 02.25.02.01
-                      0xED, 0xA9, 0xB7, 0x0A, 0xDB, 0x85, 0x3D, 0xC0, 0x92, 0x49, 0x7D, 0x41, 0x9A, 0x91, 0x09, 0xEE,
-                      # 10 SWI9x07 Openmep Key 02.25.02.01
-                      0x8A, 0x56, 0x03, 0xF0, 0xBB, 0x9C, 0x13, 0xD2, 0x4E, 0xB2, 0x45, 0xAD, 0xC4, 0x0A, 0xE7, 0x52,
-                      # 11 NTG9X40C_11.14.08.11 / mdm9x40r11_core AC815s / SWI9x50 MR1100 Openlock Key
-                      0x2A, 0xEF, 0x07, 0x2B, 0x19, 0x60, 0xC9, 0x01, 0x8B, 0x87, 0xF2, 0x6E, 0xC1, 0x42, 0xA8, 0x3A,
-                      # 12 SWI9x50 MR1100 Openmep Key
-                      0x28, 0x55, 0x48, 0x52, 0x24, 0x72, 0x63, 0x37, 0x14, 0x26, 0x37, 0x50, 0xBE, 0xFE, 0x00, 0x00,
-                      # 13 SWI9x50 Unknown key
-                      0x22, 0x63, 0x48, 0x02, 0x24, 0x72, 0x27, 0x37, 0x19, 0x26, 0x37, 0x50, 0xBE, 0xEF, 0xCA, 0xFE,
-                      # 14 SWI9x50,SWI9X06Y IMEI nv key
-                      0x98, 0xE1, 0xC1, 0x93, 0xC3, 0xBF, 0xC3, 0x50, 0x8D, 0xA1, 0x35, 0xFE, 0x50, 0x47, 0xB3, 0xC4,
-                      # 15 NTG9X35C_02.08.29.00 Openmep Key AC791L/AC790S Old
                       0x61, 0x94, 0xCE, 0xA7, 0xB0, 0xEA, 0x4F, 0x0A, 0x73, 0xC5, 0xC3, 0xA6, 0x5E, 0xEC, 0x1C, 0xE2,
+                      # 2 AC750,AC710,AC7XX,SB750A,SB750,PC7000,AC313u OPENMEP
+                      0x39, 0xC6, 0x7B, 0x04, 0xCA, 0x50, 0x82, 0x1F, 0x19, 0x63, 0x36, 0xDE, 0x81, 0x49, 0xF0, 0xD7,
+                      # 3 AC775,PC7200
+                      0xDE, 0xA5, 0xAD, 0x2E, 0xBE, 0xE1, 0xC9, 0xEF, 0xCA, 0xF9, 0xFE, 0x1F, 0x17, 0xFE, 0xED, 0x3B,
+                      # 4 MC7455_02.30.01.01 OPENMEP
+                      0xFE, 0xD4, 0x40, 0x52, 0x2D, 0x4B, 0x12, 0x5C, 0xE7, 0x0D, 0xF8, 0x79, 0xF8, 0xC0, 0xDD, 0x37,
+                      # 5 MC7455_02.30.01.01 OPENLOCK
+                      0x3B, 0x18, 0x99, 0x6B, 0x57, 0x24, 0x0A, 0xD8, 0x94, 0x6F, 0x8E, 0xD9, 0x90, 0xBC, 0x67, 0x56,
+                      # 6 SWI9x50 Openmep Key SWI9X50C_01.08.04.00
+                      0x47, 0x4F, 0x4F, 0x44, 0x4A, 0x4F, 0x42, 0x44, 0x45, 0x43, 0x4F, 0x44, 0x49, 0x4E, 0x47, 0x2E,
+                      # 7 SWI9x50 Openlock Key SWI9X50C_01.08.04.00
+                      0x4F, 0x4D, 0x41, 0x52, 0x20, 0x44, 0x49, 0x44, 0x20, 0x54, 0x48, 0x49, 0x53, 0x2E, 0x2E, 0x2E,
+                      # 8 MDM8200 Special
+                      0x8F, 0xA5, 0x85, 0x05, 0x5E, 0xCF, 0x44, 0xA0, 0x98, 0x8B, 0x09, 0xE8, 0xBB, 0xC6, 0xF7, 0x65,
+                      # 9 SWI9x07 Openlock Key 02.25.02.01
+                      0x4D, 0x42, 0xD8, 0xC1, 0x25, 0x44, 0xD8, 0xA0, 0x1D, 0x80, 0xC4, 0x52, 0x8E, 0xEC, 0x8B, 0xE3,
+                      # 10 SWI9x07 Openmep Key 02.25.02.01
+                      0xED, 0xA9, 0xB7, 0x0A, 0xDB, 0x85, 0x3D, 0xC0, 0x92, 0x49, 0x7D, 0x41, 0x9A, 0x91, 0x09, 0xEE,
+                      # 11 NTG9X40C_11.14.08.11 / mdm9x40r11_core AC815s / SWI9x50 MR1100 Openlock Key
+                      0x8A, 0x56, 0x03, 0xF0, 0xBB, 0x9C, 0x13, 0xD2, 0x4E, 0xB2, 0x45, 0xAD, 0xC4, 0x0A, 0xE7, 0x52,
+                      # 12 SWI9x50 MR1100 Openmep Key
+                      0x2A, 0xEF, 0x07, 0x2B, 0x19, 0x60, 0xC9, 0x01, 0x8B, 0x87, 0xF2, 0x6E, 0xC1, 0x42, 0xA8, 0x3A,
+                      # 13 SWI9x50/SWI9x65 Unknown key
+                      0x28, 0x55, 0x48, 0x52, 0x24, 0x72, 0x63, 0x37, 0x14, 0x26, 0x37, 0x50, 0xBE, 0xFE, 0x00, 0x00,
+                      # 14 SWI9x50,SWI9X06Y,SWI9x65 IMEI nv key
+                      0x22, 0x63, 0x48, 0x02, 0x24, 0x72, 0x27, 0x37, 0x19, 0x26, 0x37, 0x50, 0xBE, 0xEF, 0xCA, 0xFE,
+                      # 15 NTG9X35C_02.08.29.00 Openmep Key AC791L/AC790S Old
+                      0x98, 0xE1, 0xC1, 0x93, 0xC3, 0xBF, 0xC3, 0x50, 0x8D, 0xA1, 0x35, 0xFE, 0x50, 0x47, 0xB3, 0xC4,
                       # 16 NTG9X35C_02.08.29.00 Openmep Key AC791/AC790S, NTGX55_10.25.15.02 MR5100 Alternative, NTG9X40C_30.00.12.00 Alternative
-                      0xC5, 0x50, 0x40, 0xDA, 0x23, 0xE8, 0xF4, 0x4C, 0x29, 0xE9, 0x07, 0xDE, 0x24, 0xE5, 0x2C, 0x1D,
+                      0x61, 0x94, 0xCE, 0xA7, 0xB0, 0xEA, 0x4F, 0x0A, 0x73, 0xC5, 0xC3, 0xA6, 0x5E, 0xEC, 0x1C, 0xE2,
                       # 17 NTG9X35C_02.08.29.00 Openlock Key AC791/AC790S Old
-                      0xF0, 0x14, 0x55, 0x0D, 0x5E, 0xDA, 0x92, 0xB3, 0xA7, 0x6C, 0xCE, 0x84, 0x90, 0xBC, 0x7F, 0xED,
+                      0xC5, 0x50, 0x40, 0xDA, 0x23, 0xE8, 0xF4, 0x4C, 0x29, 0xE9, 0x07, 0xDE, 0x24, 0xE5, 0x2C, 0x1D,
                       # 18 NTG9X35C_02.08.29.00 Openlock Key AC791/AC790S, NTGX55_10.25.15.02 MR5100 Alternative, NTG9X40C_30.00.12.00 Alternative
-                      0x78, 0x19, 0xC5, 0x6D, 0xC3, 0xD8, 0x25, 0x3E, 0x51, 0x60, 0x8C, 0xA7, 0x32, 0x83, 0x37, 0x9D,
+                      0xF0, 0x14, 0x55, 0x0D, 0x5E, 0xDA, 0x92, 0xB3, 0xA7, 0x6C, 0xCE, 0x84, 0x90, 0xBC, 0x7F, 0xED,
                       # 19 SWI9X06Y_02.14.04.00 Openmep Key WP77xx
-                      0x12, 0xF0, 0x79, 0x6B, 0x19, 0xC7, 0xF4, 0xEC, 0x50, 0xF3, 0x8C, 0x40, 0x02, 0xC9, 0x43, 0xC8,
+                      0x78, 0x19, 0xC5, 0x6D, 0xC3, 0xD8, 0x25, 0x3E, 0x51, 0x60, 0x8C, 0xA7, 0x32, 0x83, 0x37, 0x9D,
                       # 20 SWI9X06Y_02.14.04.00 Openlock Key WP77xx
-                      0x49, 0x42, 0xFF, 0x76, 0x8A, 0x95, 0xCF, 0x7B, 0xA3, 0x47, 0x5F, 0xF5, 0x8F, 0xD8, 0x45, 0xE4,
+                      0x12, 0xF0, 0x79, 0x6B, 0x19, 0xC7, 0xF4, 0xEC, 0x50, 0xF3, 0x8C, 0x40, 0x02, 0xC9, 0x43, 0xC8,
                       # 21 NTGX55 Openmep Key, NTGX55_10.25.15.02 MR5100, NTG9X40C_30.00.12.00
-                      0xF8, 0x1A, 0x3A, 0xCC, 0xAA, 0x2B, 0xA5, 0xE8, 0x8B, 0x53, 0x5A, 0x55, 0xB9, 0x65, 0x57, 0x98,
+                      0x49, 0x42, 0xFF, 0x76, 0x8A, 0x95, 0xCF, 0x7B, 0xA3, 0x47, 0x5F, 0xF5, 0x8F, 0xD8, 0x45, 0xE4,
                       # 22 NTGX55 Openlock Key, NTGX55_10.25.15.02 MR5100, NTG9X40C_30.00.12.00
-                      0x54, 0xC9, 0xC7, 0xA4, 0x02, 0x1C, 0xB0, 0x11, 0x05, 0x22, 0x39, 0xB7, 0x84, 0xEF, 0x16, 0xCA,
+                      0xF8, 0x1A, 0x3A, 0xCC, 0xAA, 0x2B, 0xA5, 0xE8, 0x8B, 0x53, 0x5A, 0x55, 0xB9, 0x65, 0x57, 0x98,
                       # 23 NTG9X15A Openlock Key, NTG9X15A_01.08.02.00
-                      0xC7, 0xE6, 0x39, 0xFE, 0x0A, 0xC7, 0xCA, 0x4D, 0x49, 0x8F, 0xD8, 0x55, 0xEB, 0x1A, 0xCD, 0x8A
+                      0x54, 0xC9, 0xC7, 0xA4, 0x02, 0x1C, 0xB0, 0x11, 0x05, 0x22, 0x39, 0xB7, 0x84, 0xEF, 0x16, 0xCA,
                       # 24 NTG9X15A Openlock Key, NTG9X15A_01.08.02.00
+                      0xC7, 0xE6, 0x39, 0xFE, 0x0A, 0xC7, 0xCA, 0x4D, 0x49, 0x8F, 0xD8, 0x55, 0xEB, 0x1A, 0xCD, 0x8A,
+                      # 25 NTGX65 Openlock Key, NTGX65_10.04.13.03
+                      0xF2, 0x4A, 0x9A, 0x2C, 0xDA, 0x3D, 0xA5, 0xE2, 0x6B, 0x56, 0x9A, 0x45, 0x29, 0x25, 0x77, 0x9A,
+                      # 26 NTGX65 Openadm Key, NTGX65_10.04.13.03
+                      0x46, 0x30, 0x33, 0x43, 0x44, 0x36, 0x42, 0x34, 0x41, 0x32, 0x31, 0x32, 0x30, 0x35, 0x39, 0x37
                       ])
 
-'''
-The selected code is part of a Python script named sierrakeygen2.py which is used to generate keys for Sierra Wireless devices. The script contains a class SierraGenerator that has several methods to perform the key generation process. Here's a brief overview of the main functionalities:
-
-1. __init__: This method initializes the SierraGenerator object, setting up two byte arrays tbl and rtbl.
-
-2. run: This method is the main entry point for generating a key. It takes as input the device generation, a challenge, and a type. It first checks if the device generation is supported, then it retrieves the appropriate key based on the type (lockkey, mepkey, or cndkey), and finally it generates a response using the SierraKeygen method.
-
-3. SierraKeygen: This method initializes the key generation process and then executes the appropriate algorithm for the device generation. The algorithm is specified in the prodtable dictionary and is executed using the exec function.
-
-4. SierraInit, SierraPreInit, SierraFinish, SierraAlgo, sierra_calc8F: These methods are part of the key generation process. They perform various operations on the byte arrays tbl and rtbl based on the input key and challenge.
-
-5. selftest: This method tests the key generation process with a set of predefined test cases. It checks if the generated key matches the expected response for each test case.
-'''
-
-
 class SierraGenerator():
-    # Initialize two bytearrays
     tbl = bytearray()
     rtbl = bytearray()
+    devicegeneration = None
 
     def __init__(self):
-        # Fill rtbl and tbl with zeros
-        for i in range(0, 0x14):
+        for _ in range(0, 0x14):
             self.rtbl.append(0x0)
-        for i in range(0, 0x100):
+        for _ in range(0, 0x100):
             self.tbl.append(0x0)
 
-    def run(self, devicegeneration, challenge, type):
-        # Convert challenge from hex to bytes
+    def run(self, devicegeneration, challenge, _type):
         challenge = bytearray(unhexlify(challenge))
 
         self.devicegeneration = devicegeneration
-        # Check if devicegeneration is supported
         if not devicegeneration in prodtable:
             print("Sorry, " + devicegeneration + " not supported.")
             exit(0)
 
-        # Get the ids and length from the prodtable
         mepid = prodtable[devicegeneration]["openmep"]
         cndid = prodtable[devicegeneration]["opencnd"]
         lockid = prodtable[devicegeneration]["openlock"]
         clen = prodtable[devicegeneration]["clen"]
-        # If challenge length is less than clen, pad it with zeros
         if len(challenge) < clen:
-            challenge=[0 for i in range(0, clen - len(challenge))]
+            challenge = [0 for _ in range(0, clen - len(challenge))]
 
         challengelen = len(challenge)
-        # Determine the idf based on the type
-        if type == 0:  # lockkey
+        if _type == 0:  # lockkey
             idf = lockid
-        elif type == 1:  # mepkey
+        elif _type == 1:  # mepkey
             idf = mepid
-        elif type == 2:  # cndkey
+        elif _type == 2:  # cndkey
             idf = cndid
 
-        # Get the key from the keytable
         key = keytable[idf * 16:(idf * 16) + 16]
-        # Generate the response
         resp = self.SierraKeygen(challenge=challenge, key=key, challengelen=challengelen, keylen=16)[:challengelen]
-        # Convert the response to hex and uppercase
         resp = hexlify(resp).decode('utf-8').upper()
         return resp
 
     def selftest(self):
-        # Test table with challenge, devicegeneration, and expected response
-        test_table=[
+        test_table = [
             {"challenge": "8101A18AB3C3E66A", "devicegeneration": "MDM9x15", "response": "D1E128FCA8A963ED"},
             {"challenge": "BE96CBBEE0829BCA", "devicegeneration": "MDM9x40", "response": "1033773720F6EE66"},
             {"challenge": "BE96CBBEE0829BCA", "devicegeneration": "MDM9x30", "response": "1E02CE6A98B7DD2A"},
@@ -212,22 +265,20 @@ class SierraGenerator():
             {"challenge": "BE96CBBEE0829BCA", "devicegeneration": "MDM9200", "response": "EEDBF8BFF8DAE346"},
             {"challenge": "20E253156762DACE", "devicegeneration": "SDX55", "response": "03940D7067145323"},
             {"challenge": "2387885E7D290FEE", "devicegeneration": "MDM9x15A", "response": "DC3E51897BAA9C1E"},
+            {"challenge": "4B1FEF9FD43C6DAA", "devicegeneration": "SDX65", "response":"1253C1B1E447B697"}
         ]
-        # Run the test for each entry in the test table
         for test in test_table:
             challenge = test["challenge"]
             devicegeneration = test["devicegeneration"]
             response = test["response"]
             openlock = self.run(devicegeneration, challenge, 0)
             padding = " " * (16 - len(devicegeneration))
-            # Print the result of the test
             if openlock != response:
-                print(devicegeneration+padding+" FAILED!")
+                print(devicegeneration + padding + " FAILED!")
             else:
-                print(devicegeneration+padding+" PASSED :)")
+                print(devicegeneration + padding + " PASSED :)")
 
     def SierraPreInit(self, counter, key, keylen, challengelen, mcount):
-        # Pre-initialization for the SierraInit function
         if counter != 0:
             tmp2 = 0
             i = 1
@@ -250,11 +301,10 @@ class SierraGenerator():
         return [counter, challengelen, mcount]
 
     def SierraInit(self, key, keylen):
-        # Initialize the tbl and rtbl arrays
         if keylen == 0 or keylen > 0x20:
             retval = [0, keylen]
         elif 1 <= keylen <= 0x20:
-            self.tbl = [(i&0xFF) for i in range(0, 0x100)]
+            self.tbl = [(i & 0xFF) for i in range(0, 0x100)]
             mcount = 0
             cl = keylen & 0xffffff00
             i = 0xFF
@@ -264,7 +314,6 @@ class SierraGenerator():
                 self.tbl[i] = self.tbl[(t & 0xff)]
                 i = i - 1
                 self.tbl[(t & 0xFF)] = m
-            # Initialize the rtbl array based on the devicegeneration
             self.rtbl[0] = self.tbl[prodtable[self.devicegeneration]["init"][0]] if \
                 prodtable[self.devicegeneration]["init"][0] != 0 else self.tbl[(cl & 0xFF)]
             self.rtbl[1] = self.tbl[prodtable[self.devicegeneration]["init"][1]] if \
@@ -279,7 +328,7 @@ class SierraGenerator():
         return retval
 
     def sierra_calc8F(self, challenge, a=0, b=1, c=2, d=3, e=4, ret=0, ret2=2):
-        # Calculation for MDM9200
+        # MDM9200
         self.rtbl[b] = (self.rtbl[b] + self.tbl[(self.rtbl[d] & 0xFF)]) & 0xFF
         uVar2 = self.rtbl[c] & 0xFF
         bVar1 = self.tbl[uVar2]
@@ -299,7 +348,6 @@ class SierraGenerator():
         return self.rtbl[ret2] & 0xFF  # a
 
     def SierraAlgo(self, challenge, a=0, b=1, c=2, d=3, e=4, ret=3, ret2=1, flag=1):  # M9x15
-        # Algorithm for M9x15
         v6 = self.rtbl[e]
         v0 = (v6 + 1) & 0xFF
         self.rtbl[e] = v0
@@ -322,7 +370,6 @@ class SierraGenerator():
         return self.rtbl[ret] & 0xFF
 
     def SierraFinish(self):
-        # Reset the tbl and rtbl arrays
         self.tbl = [0 for _ in range(0, 0x100)]
         self.rtbl[0] = 0
         self.rtbl[1] = 0
@@ -331,45 +378,39 @@ class SierraGenerator():
         self.rtbl[4] = 0
         return 1
 
-    def SierraKeygen(self, challenge:bytearray, key: bytearray, challengelen:int, keylen:int):
-        # Generate a key based on the challenge
+    def SierraKeygen(self, challenge: bytearray, key: bytearray, challengelen: int, keylen: int):
         challenge = challenge
-        resultbuffer=bytearray([0 for i in range(0, 0x100 + 1)])
+        resultbuffer = bytearray([0 for _ in range(0, 0x100 + 1)])
         ret, keylen = self.SierraInit(key, keylen)
         if ret:
             for i in range(0, challengelen):
-                exec(prodtable[self.devicegeneration]["run"]) # uses challenge
+                exec(prodtable[self.devicegeneration]["run"])  # uses challenge
             self.SierraFinish()
         return resultbuffer
 
 
 class connection:
-    # Initialize the connection class
-    def __init__(self, port=""):
+    def __init__(self, port="", ip="192.168.1.1"):
         self.serial = None
         self.tn = None
         self.connected = False
-        # If no port is specified, try to detect it
         if port == "":
             port = self.detect(port)
-            # If no port is detected, try to connect via Telnet
             if port == "":
-                self.tn = Telnet("192.168.1.1", 5510)
-                self.connected = True
-        # If a port is specified or detected, try to connect via serial
+                self.tn = Telnet(ip, 5510)
+                if self.tn:
+                    self.connected = True
+                else:
+                    self.connected = False
         if port != "":
             self.serial = serial.Serial(port=port, baudrate=115200, bytesize=8, parity='N', stopbits=1, timeout=1)
             self.connected = self.serial.is_open
 
-    # Detect the port of the device
     def detect(self, port):
         if port == "":
-            # Iterate over all available ports
             for port in serial.tools.list_ports.comports():
-                # Check if the port belongs to a Sierra Wireless or Netgear device
                 if port.vid == 0x1199:
                     portid = port.location[-1:]
-                    # Check if the port ID is 3
                     if int(portid) == 3:
                         print("Detected Sierra Wireless device at: " + port.device)
                         return port.device
@@ -381,7 +422,6 @@ class connection:
 
         return ""
 
-    # Read the reply from the device
     def readreply(self):
         info = []
         if self.serial is not None:
@@ -394,7 +434,6 @@ class connection:
                 info.append(tmp)
         return info
 
-    # Send a command to the device
     def send(self, cmd):
         if self.tn is not None:
             self.tn.write(bytes(cmd + "\r", 'utf-8'))
@@ -402,8 +441,8 @@ class connection:
             data = ""
             while True:
                 tmp = self.tn.read_eager()
-                if tmp != b"":
-                    data += tmp.strip().decode('utf-8')
+                if tmp != "":
+                    data += tmp.strip()
                 else:
                     break
             return data.split("\r\n")
@@ -412,7 +451,6 @@ class connection:
             time.sleep(0.05)
             return self.readreply()
 
-    # Close the connection
     def close(self):
         if self.tn is not None:
             self.tn.close()
@@ -421,10 +459,126 @@ class connection:
             self.serial.close()
             self.connected = False
 
+
+class SierraKeygen(metaclass=LogBase):
+    def __init__(self, cn, devicegeneration=None):
+        self.cn = cn
+        self.keygen = SierraGenerator()
+        if devicegeneration == None:
+            self.detectdevicegeneration()
+        else:
+            self.devicegeneration = devicegeneration
+
+    def run_selftest(self):
+        print("Running self-test ...")
+        self.keygen.selftest()
+
+    def detectdevicegeneration(self):
+        if self.cn.connected:
+            info = self.cn.send("ATI")
+            if info != -1:
+                revision = ""
+                _model = ""
+                for line in info:
+                    if "Revision" in line:
+                        revision = line.split(":")[1].strip()
+                    if "Model" in line:
+                        _model = line.split(":")[1].strip()
+                if revision != "":
+                    if "9200" in revision:
+                        devicegeneration = "MDM9200"  # AC762S NTG9200H2_03.05.14.12ap
+                    if "9X07" in revision:
+                        devicegeneration = "MDM9x07"
+                    elif "9X25" in revision:
+                        if "NTG9X25C" in revision:
+                            devicegeneration = "MDM9200"  # AC781S NTG9X25C_01.00.57.00
+                    elif "9X15" in revision:
+                        if "NTG9X15A" in revision:
+                            devicegeneration = "MDM9x15A"  # Aircard 779S
+                        elif "NTG9X15C" in revision:
+                            devicegeneration = "MDM9200"  # AC770S NTG9X15C_01.18.02.00
+                        elif "9X15A" in revision:
+                            devicegeneration = "MDM9x15A"
+                        else:
+                            devicegeneration = "MDM9x15"
+                    elif "9X30" in revision:
+                        if "NTG9X35C" in revision:  # 790S NTG9X35C_11.11.15.03
+                            devicegeneration = "MDM9x30_V1"
+                        else:
+                            devicegeneration = "MDM9x30"
+                    elif "9X40" in revision and not "9X40C" in revision:
+                        devicegeneration = "MDM9x40"
+                    elif "9X50" in revision:
+                        if "NTG9X50" in revision:
+                            devicegeneration = "MDM9x40"  # MR1100,AC797S NTG9X50C_12.06.03.00
+                        else:
+                            devicegeneration = "MDM9x50"
+                    elif "9X06" in revision:
+                        devicegeneration = "MDM9x06"
+                    elif "X55" in revision or "9X40C" in revision:
+                        if "NTGX55" in revision:  # MR5100 NTGX55_10.25.15.02, MR5200 NTGX55_12.04.12.00
+                            devicegeneration = "SDX55"
+                        devicegeneration = "SDX55"
+                    elif "X65" in revision:
+                        if "NTGX65" in revision:
+                            version = revision[revision.find("_") + 1:revision.find(" ")].split(".")
+                            maj = int(version[0]) * 1000000 + int(version[1]) * 10000 + int(version[2]) * 100 + int(
+                                version[3])
+                            if maj < 10041303:
+                                devicegeneration = "SDX55"
+                            else:  # MR6400 NTGX65_10.04.13.03
+                                devicegeneration = "SDX65"
+                                   # MR6550 NTGX65_12.01.31.00
+                        devicegeneration = "SDX65"
+                    else:
+                        devicegeneration = ""
+                    # Missing:
+                    # SDX24 Sierra
+                    # MR2100 NTGX24_10.17.03.00
+                    # SDX55 Sierra
+                    # AC810S NTG9X40C_11.14.08.16
+                    # AC800S NTG9X40C_11.14.07.00
+                    self.devicegeneration = devicegeneration
+            else:
+                print("Error on getting ATI modem response. Wrong port? Aborting.")
+                self.cn.close()
+                exit(0)
+
+    def openlock(self):
+        print("Device generation detected: " + self.devicegeneration)
+        # print("Sending AT!ENTERCND=\"A710\" request.")
+        # info = self.cn.send("AT!ENTERCND=\"A710\"")
+        # if info == -1:
+        #    print("Uhoh ... invalid entercnd password. Aborting ...")
+        #    return
+        print("Sending AT!OPENLOCK? request")
+        info = self.cn.send("AT!OPENLOCK?")
+        challenge = ""
+        if info != -1:
+            if len(info) > 2:
+                challenge = info[1]
+                print("Received challenge: " + info[1])
+        else:
+            print("Error on AT!OPENLOCK? request. Aborting.")
+            return False
+        if challenge == "":
+            print("Error: Couldn't get challenge. Aborting.")
+            return False
+        resp = self.keygen.run(self.devicegeneration, challenge, 0)
+        print("Sending AT!OPENLOCK=\"" + resp + "\" response.")
+        info = self.cn.send("AT!OPENLOCK=\"" + resp + "\"")
+        if info == -1:
+            print("Damn. AT!OPENLOCK failed.")
+        else:
+            print("Success. Device is now engineer unlocked.")
+            return True
+        return False
+
+
 def main(args):
-    version = "1.4"
+    version = "1.5"
     info = 'Sierra Wireless Generator ' + version + ' (c) B. Kerler 2019-2021'
-    parser = argparse.ArgumentParser(formatter_class=argparse.RawDescriptionHelpFormatter,description=info)
+    parser = argparse.ArgumentParser(formatter_class=argparse.RawDescriptionHelpFormatter, description=info)
 
     parser.add_argument(
         '-openlock', '-l',
@@ -443,13 +597,18 @@ def main(args):
 
     parser.add_argument(
         '-devicegeneration', '-d',
-        help='Device devicegeneration generation',
+        help='device generation',
         default="")
 
     parser.add_argument(
         '-port', '-p',
         help='use com port for auto unlock',
         default="")
+
+    parser.add_argument(
+        '-ip',
+        help='ip port for unlock, usually 192.168.1.1 or 192.168.2.1',
+        default="192.168.1.1")
 
     parser.add_argument(
         '-unlock', '-u',
@@ -473,10 +632,10 @@ def main(args):
             print(info)
             print("------------------------------------------------------------\n")
             print("Usage: ./sierrakeygen.py [-l,-m,-c] [challenge] -d [devicegeneration]")
-            print("Example: ./sierrakeygen.py.py -l BE96CBBEE0829BCA -d MDM9200")
-            print("or: ./sierrakeygen.py.py -u for auto unlock")
-            print("or: ./sierrakeygen.py.py -u -p [portname] for auto unlock with given portname")
-            print("or: ./sierrakeygen.py.py -s for self-test")
+            print("Example: ./sierrakeygen.py -l BE96CBBEE0829BCA -d MDM9200")
+            print("or: ./sierrakeygen.py -u for auto unlock")
+            print("or: ./sierrakeygen.py -u -p [portname] for auto unlock with given portname")
+            print("or: ./sierrakeygen.py -s for self-test")
             print("Supported devicegenerations :")
             for key in infotable:
                 info = f"\t{key}:\t\t"
@@ -496,14 +655,14 @@ def main(args):
             print("You need to specific a device generation as well. Option -d")
             exit(0)
     if devicegeneration == "":
-        devicegeneration=None
+        devicegeneration = None
     if args.selftest:
-        kg=SierraKeygen(None,"selftest")
+        kg = SierraKeygen(None, "selftest")
         kg.run_selftest()
     elif args.unlock:
-        cn = connection(args.port)
+        cn = connection(args.port, args.ip)
         if cn.connected:
-            kg=SierraKeygen(cn,devicegeneration)
+            kg = SierraKeygen(cn, devicegeneration)
             if kg.devicegeneration == "":
                 print("Unknown device generation. Please send me details :)")
             else:
@@ -524,4 +683,3 @@ def main(args):
 
 if __name__ == '__main__':
     main(sys.argv)
-
